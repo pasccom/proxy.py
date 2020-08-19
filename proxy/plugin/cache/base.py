@@ -66,13 +66,15 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         self.__local = self.__class__.local.is_set()
         if not self.__enabled:
             return request
+        if self.__local:
+            return None
 
         assert self.store
         logger.info("Upstream connexion %s:%d %s" %
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
         if (request.method == httpMethods.CONNECT):
-            return request if not self.__local else None
+            return request
 
         try:
             if self.store.is_cached(request):
@@ -100,6 +102,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
             msg = self.store.cache_request(request)
             if (msg.type == httpParserTypes.REQUEST_PARSER):
                 if self.__local:
+                    self.store.close()
                     self.client.queue(memoryview(build_http_response(
                         httpStatusCodes.BAD_GATEWAY,
                         reason=b'Bad gateway',
