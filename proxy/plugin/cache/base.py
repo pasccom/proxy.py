@@ -46,6 +46,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
 
     # Dynamically enable / disable cache
     enabled = EnabledDescriptor(True)
+    local = EnabledDescriptor(False)  # TODO configure using flags
 
     def __init__(
             self,
@@ -53,6 +54,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
             **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.store: Optional[CacheStore] = None
+        self.__local: Optional[bool] = None
         self.__enabled: Optional[bool] = None
 
     def set_store(self, store: CacheStore) -> None:
@@ -61,6 +63,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
     def before_upstream_connection(
             self, request: HttpParser) -> Optional[HttpParser]:
         self.__enabled = self.__class__.enabled.is_set()
+        self.__local = self.__class__.local.is_set()
         if not self.__enabled:
             return request
 
@@ -69,7 +72,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
         if (request.method == httpMethods.CONNECT):
-            return request
+            return request if not self.__local else None
 
         try:
             if self.store.is_cached(request):
@@ -82,6 +85,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
     def handle_client_request(
             self, request: HttpParser) -> Optional[HttpParser]:
         assert self.__enabled is not None
+        assert self.__local is not None
         if not self.__enabled:
             return request
 
@@ -95,6 +99,17 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         try:
             msg = self.store.cache_request(request)
             if (msg.type == httpParserTypes.REQUEST_PARSER):
+                if self.__local:
+                    self.client.queue(memoryview(build_http_response(
+                        httpStatusCodes.BAD_GATEWAY,
+                        reason=b'Bad gateway',
+                        headers={
+                            b'Server': PROXY_AGENT_HEADER_VALUE,
+                            b'Connection': b'close',
+                        },
+                        body=b'Ressource has not been cached yet. Please allow upstream.'
+                    )))
+                    return None
                 return msg
             elif (msg.type == httpParserTypes.RESPONSE_PARSER):
                 self.client.queue(memoryview(build_http_response(
@@ -126,6 +141,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
 
     def handle_upstream_chunk(self, chunk: memoryview) -> memoryview:
         assert self.__enabled is not None
+        assert self.__local is not None
         if not self.__enabled:
             return chunk
 
@@ -134,6 +150,7 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
 
     def on_upstream_connection_close(self) -> None:
         assert self.__enabled is not None
+        assert self.__local is not None
         if not self.__enabled:
             return
 
