@@ -209,45 +209,45 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
         if not self.request.has_upstream_server():
             return raw
 
-        if self.server and not self.server.closed:
-            if self.request.state == httpParserStates.COMPLETE and (
-                    self.request.method != httpMethods.CONNECT or
-                    self.flags.tls_interception_enabled()):
-                if self.pipeline_request is not None and \
-                        self.pipeline_request.is_connection_upgrade():
-                    # Previous pipelined request was a WebSocket
-                    # upgrade request. Incoming client data now
-                    # must be treated as WebSocket protocol packets.
-                    self.server.queue(raw)
-                    return None
-
-                if self.pipeline_request is None:
-                    self.pipeline_request = HttpParser(
-                        httpParserTypes.REQUEST_PARSER)
-
-                # TODO(abhinavsingh): Remove .tobytes after parser is
-                # memoryview compliant
-                self.pipeline_request.parse(raw.tobytes())
-                if self.pipeline_request.state == httpParserStates.COMPLETE:
-                    for plugin in self.plugins.values():
-                        assert self.pipeline_request is not None
-                        r = plugin.handle_client_request(self.pipeline_request)
-                        if r is None:
-                            return None
-                        self.pipeline_request = r
-                    assert self.pipeline_request is not None
-                    # TODO(abhinavsingh): Remove memoryview wrapping here after
-                    # parser is fully memoryview compliant
-                    self.server.queue(
-                        memoryview(
-                            self.pipeline_request.build()))
-                    if not self.pipeline_request.is_connection_upgrade():
-                        self.pipeline_request = None
-            else:
+        if self.request.state == httpParserStates.COMPLETE and (
+                self.request.method != httpMethods.CONNECT or
+                self.flags.tls_interception_enabled()):
+            if self.server and not self.server.closed and \
+                    self.pipeline_request is not None and \
+                    self.pipeline_request.is_connection_upgrade():
+                # Previous pipelined request was a WebSocket
+                # upgrade request. Incoming client data now
+                # must be treated as WebSocket protocol packets.
                 self.server.queue(raw)
+                return None
+
+            if self.pipeline_request is None:
+                self.pipeline_request = HttpParser(
+                    httpParserTypes.REQUEST_PARSER)
+
+            # TODO(abhinavsingh): Remove .tobytes after parser is
+            # memoryview compliant
+            self.pipeline_request.parse(raw.tobytes())
+            if self.pipeline_request.state == httpParserStates.COMPLETE:
+                for plugin in self.plugins.values():
+                    assert self.pipeline_request is not None
+                    r = plugin.handle_client_request(self.pipeline_request)
+                    if r is None:
+                        return None
+                    self.pipeline_request = r
+                assert self.pipeline_request is not None
+                # TODO(abhinavsingh): Remove memoryview wrapping here after
+                # parser is fully memoryview compliant
+                if self.server and not self.server.closed:
+                    self.server.queue(memoryview(self.pipeline_request.build()))
+                if not self.pipeline_request.is_connection_upgrade():
+                    self.pipeline_request = None
+        elif self.server and not self.server.closed:
+            self.server.queue(raw)
+
+        if self.server and not self.server.closed:
             return None
-        else:
-            return raw
+        return raw
 
     def on_request_complete(self) -> Union[socket.socket, bool]:
         if not self.request.has_upstream_server():
@@ -284,7 +284,8 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
             # If interception is enabled
             if self.flags.tls_interception_enabled():
                 # Perform SSL/TLS handshake with upstream
-                self.wrap_server()
+                if self.server is not None:
+                    self.wrap_server()
                 # Generate certificate and perform handshake with client
                 try:
                     # wrap_client also flushes client data before wrapping
@@ -375,7 +376,7 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
         assert(self.request.host and self.flags.ca_cert_dir and self.flags.ca_signing_key_file and
                self.flags.ca_key_file and self.flags.ca_cert_file)
 
-        upstream_subject = {s[0][0]: s[0][1] for s in certificate['subject']}
+        upstream_subject = {s[0][0]: s[0][1] for s in certificate['subject']} if 'subject' in certificate else {}
         public_key_path = os.path.join(self.flags.ca_cert_dir,
                                        '{0}.{1}'.format(text_(self.request.host), 'pub'))
         private_key_path = self.flags.ca_signing_key_file
@@ -458,10 +459,13 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
         assert isinstance(self.server.connection, ssl.SSLSocket)
 
     def wrap_client(self) -> None:
-        assert self.server is not None and self.flags.ca_signing_key_file is not None
-        assert isinstance(self.server.connection, ssl.SSLSocket)
-        generated_cert = self.generate_upstream_certificate(
-            cast(Dict[str, Any], self.server.connection.getpeercert()))
+        assert self.flags.ca_signing_key_file is not None
+        if self.server is not None:
+            assert isinstance(self.server.connection, ssl.SSLSocket)
+            cert = cast(Dict[str, Any], self.server.connection.getpeercert())
+        else:
+            cert = {}
+        generated_cert = self.generate_upstream_certificate(cert)
         self.client.wrap(self.flags.ca_signing_key_file, generated_cert)
         logger.debug(
             'TLS interception using %s', generated_cert)
