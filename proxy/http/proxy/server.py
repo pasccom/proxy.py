@@ -233,6 +233,8 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
                     assert self.pipeline_request is not None
                     r = plugin.handle_client_request(self.pipeline_request)
                     if r is None:
+                        if not self.pipeline_request.is_connection_upgrade():
+                            self.pipeline_request = None
                         return None
                     self.pipeline_request = r
                 assert self.pipeline_request is not None
@@ -240,6 +242,10 @@ class HttpProxyPlugin(HttpProtocolHandlerPlugin):
                 # parser is fully memoryview compliant
                 if self.server and not self.server.closed:
                     self.server.queue(memoryview(self.pipeline_request.build()))
+                # NOTE(pasccom): What do we do? Upstream connection was blocked,
+                # but no plugin handled client request.
+                # Currently wait for request timeout, but maybe we should
+                # return an HTTP error code.
                 if not self.pipeline_request.is_connection_upgrade():
                     self.pipeline_request = None
         elif self.server and not self.server.closed:
