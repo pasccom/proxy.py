@@ -16,6 +16,7 @@ from .store.base import CacheStore
 from ...http.parser import HttpParser, httpParserTypes
 from ...http.proxy import HttpProxyBasePlugin
 from ...http.codes import httpStatusCodes
+from ...http.methods import httpMethods
 from ...common.constants import PROXY_AGENT_HEADER_VALUE
 from ...common.utils import text_
 from ...common.utils import build_http_response
@@ -67,8 +68,8 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         logger.info("Upstream connexion %s:%d %s" %
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
-        if request.port == 443:
-            return request
+        # if request.port == 443:
+        #    return request
 
         try:
             if self.store.is_cached(request):
@@ -88,12 +89,14 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         logger.info("Client request %s:%d %s" %
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
-        if request.port == 443:
-            return request
+        # if request.port == 443:
+        #     return request
 
         try:
             msg = self.store.cache_request(request)
-            if (msg.type == httpParserTypes.REQUEST_PARSER):
+            if (request.method == httpMethods.CONNECT):
+                return request
+            elif (msg.type == httpParserTypes.REQUEST_PARSER):
                 return msg
             elif (msg.type == httpParserTypes.RESPONSE_PARSER):
                 self.client.queue(memoryview(build_http_response(
