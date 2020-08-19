@@ -301,7 +301,7 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         # Setup cache:
         cache_file_name = 'test'
         with open(Path(tempfile.gettempdir()) / 'list.txt', 'wt') as cache_list:
-            cache_list.write('GET uni.corn /get None %s' % cache_file_name)
+            cache_list.write('GET uni.corn /get None %s\n' % cache_file_name)
         with open(Path(tempfile.gettempdir()) / ('proxy-cache-' + cache_file_name), 'wb') as cache_file:
             cache_file.write(cache_response)
 
@@ -333,6 +333,73 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         self.client_ssl_connection.send.return_value = len(cache_response)
         self.protocol_handler.run_once()
         self.client_ssl_connection.send.assert_called_once_with(cache_response)
+
+        # Client close connection:
+        self.client_ssl_connection.recv.return_value = b''
+        self.protocol_handler.run_once()
+        self.protocol_handler.shutdown()
+
+    def test_cache_responses_plugin_load_pipelined(self) -> None:
+        requests = []
+        cache_responses = []
+
+        # Setup cache:
+        with open(Path(tempfile.gettempdir()) / 'list.txt', 'wt') as cache_list:
+            for r in range(1, 3):
+                cache_list.write('GET uni.corn /test%d None test%d\n' % (r, r))
+                requests.append(build_http_request(
+                    b'GET', b'/test%d' % r,
+                    headers={
+                        b'Host': b'uni.corn',
+                    }
+                ))
+                cache_responses.append(build_http_response(
+                    httpStatusCodes.OK,
+                    reason=b'OK',
+                    body=b'Response %d From Cache' % r
+                ))
+                with open(Path(tempfile.gettempdir()) / ('proxy-cache-test%d' % r), 'wb') as cache_file:
+                    cache_file.write(cache_responses[-1])
+
+        # Setup selector:
+        self.mock_selector.return_value.select.side_effect = [
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+        ]
+
+        for r in range(0, len(requests)):
+            # Client read:
+            self.client_ssl_connection.recv.return_value = requests[r]
+            self.protocol_handler.run_once()
+            self.server_ssl_connection.send.assert_not_called()
+
+            # Client write:
+            self.client_ssl_connection.send.return_value = len(cache_responses[r])
+            self.protocol_handler.run_once()
+            self.client_ssl_connection.send.assert_called_with(cache_responses[r])
 
         # Client close connection:
         self.client_ssl_connection.recv.return_value = b''

@@ -460,3 +460,85 @@ class TestHttpProxyPluginExamples(unittest.TestCase):
         self._conn.recv.return_value = b''
         self.protocol_handler.run_once()
         self.protocol_handler.shutdown()
+
+    @mock.patch('proxy.http.proxy.server.TcpServerConnection')
+    def test_cache_responses_plugin_load_pipelined(self, mock_server_conn: mock.Mock) -> None:
+        requests = []
+        cache_responses = []
+
+        # Setup cache:
+        with open(Path(tempfile.gettempdir()) / 'list.txt', 'wt') as cache_list:
+            for r in range(1, 3):
+                cache_list.write('GET example.org /test%d None test%d\n' % (r, r))
+                requests.append(build_http_request(
+                    b'GET', b'http://example.org/test%d' % r,
+                    headers={
+                        b'Host': b'example.org',
+                    }
+                ))
+                cache_responses.append(build_http_response(
+                    httpStatusCodes.OK,
+                    reason=b'OK',
+                    body=b'Response %d From Cache' % r
+                ))
+                with open(Path(tempfile.gettempdir()) / ('proxy-cache-test%d' % r), 'wb') as cache_file:
+                    cache_file.write(cache_responses[-1])
+
+        # Setup server:
+        server = mock_server_conn.return_value
+        server.addr = ('example.org', 80)
+        server.connect.return_value = True
+
+        def has_buffer() -> bool:
+            return cast(bool, server.queue.called)
+
+        def closed() -> bool:
+            return not server.connect.called
+
+        server.has_buffer.side_effect = has_buffer
+        type(server).closed = mock.PropertyMock(side_effect=closed)
+
+        # Setup selector:
+        self.mock_selector.return_value.select.side_effect = [
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+        ]
+
+        for r in range(0, len(requests)):
+            # Client read:
+            self._conn.recv.return_value = requests[r]
+            self.protocol_handler.run_once()
+            mock_server_conn.send.assert_not_called()
+
+            # Client write:
+            self._conn.send.return_value = len(cache_responses[r])
+            self.protocol_handler.run_once()
+            self._conn.send.assert_called_with(cache_responses[r])
+
+        # Client close connection:
+        self._conn.recv.return_value = b''
+        self.protocol_handler.run_once()
+        self.protocol_handler.shutdown()
