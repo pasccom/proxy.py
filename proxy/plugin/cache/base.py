@@ -68,8 +68,8 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         logger.info("Upstream connexion %s:%d %s" %
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
-        # if request.port == 443:
-        #    return request
+        if (request.method == httpMethods.CONNECT):
+            return request
 
         try:
             if self.store.is_cached(request):
@@ -89,14 +89,12 @@ class BaseCacheResponsesPlugin(HttpProxyBasePlugin):
         logger.info("Client request %s:%d %s" %
                     (text_(request.host), request.port if request.port else 0, text_(request.path)))
 
-        # if request.port == 443:
-        #     return request
+        if (request.method == httpMethods.CONNECT):
+            return request
 
         try:
             msg = self.store.cache_request(request)
-            if (request.method == httpMethods.CONNECT):
-                return request
-            elif (msg.type == httpParserTypes.REQUEST_PARSER):
+            if (msg.type == httpParserTypes.REQUEST_PARSER):
                 return msg
             elif (msg.type == httpParserTypes.RESPONSE_PARSER):
                 self.client.queue(memoryview(build_http_response(
