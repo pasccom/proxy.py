@@ -15,6 +15,20 @@ from proxy.plugin import ModifyPostDataPlugin, ProposedRestApiPlugin, RedirectTo
     FilterByUpstreamHostPlugin, CacheResponsesPlugin, ManInTheMiddlePlugin, FilterByURLRegexPlugin
 
 
+def without_upstream(fun: Callable[..., None]) -> Callable[..., None]:
+    def decorated_fun(self: Any, *args: Any, **kwArgs: Any) -> None:
+        with self.subTest(msg='Without upstream'):
+            CacheResponsesPlugin.local.set()
+            if hasattr(self, 'connect_upstream'):
+                self.connect_upstream = False
+            self.setUp()
+            fun(self, *args, **kwArgs)
+        CacheResponsesPlugin.local.clear()
+        if hasattr(self, 'connect_upstream'):
+            self.connect_upstream = True
+    return decorated_fun
+
+
 def with_and_without_upstream(fun: Callable[..., None]) -> Callable[..., None]:
     def decorated_fun(self: Any, *args: Any, **kwArgs: Any) -> None:
         with self.subTest(msg='Without upstream'):

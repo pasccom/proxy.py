@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 from typing import Any, cast
 
+from proxy.common.constants import PROXY_AGENT_HEADER_VALUE
 from proxy.common.utils import bytes_
 from proxy.common.flags import Flags
 from proxy.common.utils import build_http_request, build_http_response
@@ -29,7 +30,7 @@ from proxy.http.handler import HttpProtocolHandler
 from proxy.http.proxy import HttpProxyPlugin
 
 from .utils import get_plugin_by_test_name
-from .utils import with_and_without_upstream
+from .utils import with_and_without_upstream, without_upstream
 
 
 class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
@@ -320,6 +321,60 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
             pass
         with open(Path(tempfile.gettempdir()) / 'proxy-cache-test', 'wb') as cache_file:
             cache_file.write(cache_response)
+
+        self.connect()
+
+        # Setup selector:
+        self.mock_selector.return_value.select.side_effect = [
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self.client_ssl_connection,
+                fd=self.client_ssl_connection.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+        ]
+
+        # Client read:
+        self.client_ssl_connection.recv.return_value = request
+        self.protocol_handler.run_once()
+        self.server_ssl_connection.send.assert_not_called()
+
+        # Client write:
+        self.client_ssl_connection.send.return_value = len(cache_response)
+        self.protocol_handler.run_once()
+        self.client_ssl_connection.send.assert_called_once_with(cache_response)
+
+        # Client close connection:
+        self.client_ssl_connection.recv.return_value = b''
+        self.protocol_handler.run_once()
+        self.protocol_handler.shutdown()
+
+    @without_upstream
+    def test_cache_responses_plugin_not_cached(self) -> None:
+        request = build_http_request(
+            b'GET', b'/get',
+            headers={
+                b'Host': b'uni.corn',
+            }
+        )
+        cache_response = build_http_response(
+            httpStatusCodes.BAD_GATEWAY,
+            reason=b'Bad gateway',
+            headers={
+                b'Server': PROXY_AGENT_HEADER_VALUE,
+                b'Connection': b'close',
+            },
+            body=b'Ressource has not been cached yet. Please allow upstream.'
+        )
 
         self.connect()
 

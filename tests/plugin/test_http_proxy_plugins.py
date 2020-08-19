@@ -17,7 +17,7 @@ from pathlib import Path
 
 from urllib import parse as urlparse
 from unittest import mock
-from typing import Any, cast
+from typing import cast
 
 from proxy.common.flags import Flags
 from proxy.core.connection import TcpClientConnection
@@ -27,17 +27,13 @@ from proxy.common.utils import build_http_request, bytes_, build_http_response
 from proxy.common.constants import PROXY_AGENT_HEADER_VALUE, DEFAULT_HTTP_PORT
 from proxy.http.codes import httpStatusCodes
 
-from proxy.plugin import ProposedRestApiPlugin, RedirectToCustomServerPlugin
+from proxy.plugin import ProposedRestApiPlugin, RedirectToCustomServerPlugin, CacheResponsesPlugin
 
 from .utils import get_plugin_by_test_name
-from .utils import with_and_without_upstream
+from .utils import with_and_without_upstream, without_upstream
 
 
 class TestHttpProxyPluginExamples(unittest.TestCase):
-
-    def __init__(self, *args: Any, **kwArgs: Any) -> None:
-        super().__init__(*args, **kwArgs)
-        self.connect_upstream = True
 
     @mock.patch('selectors.DefaultSelector')
     @mock.patch('socket.fromfd')
@@ -51,6 +47,7 @@ class TestHttpProxyPluginExamples(unittest.TestCase):
 
         self.mock_fromfd = mock_fromfd
         self.mock_selector = mock_selector
+        self.connect_upstream = True
 
         plugin = get_plugin_by_test_name(self._testMethodName)
 
@@ -418,6 +415,76 @@ class TestHttpProxyPluginExamples(unittest.TestCase):
             cache_list.write('GET example.org /get None %s' % cache_file_name)
         with open(Path(tempfile.gettempdir()) / ('proxy-cache-' + cache_file_name), 'wb') as cache_file:
             cache_file.write(cache_response)
+
+        # Setup server:
+        server = mock_server_conn.return_value
+        server.addr = ('example.org', 80)
+        server.connect.return_value = True
+
+        def has_buffer() -> bool:
+            return cast(bool, server.queue.called)
+
+        def closed() -> bool:
+            return not server.connect.called
+
+        server.has_buffer.side_effect = has_buffer
+        type(server).closed = mock.PropertyMock(side_effect=closed)
+
+        # Setup selector:
+        self.mock_selector.return_value.select.side_effect = [
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_WRITE,
+                data=None), selectors.EVENT_WRITE)],
+            [(selectors.SelectorKey(
+                fileobj=self._conn,
+                fd=self._conn.fileno,
+                events=selectors.EVENT_READ,
+                data=None), selectors.EVENT_READ)],
+        ]
+
+        # Client read:
+        self._conn.recv.return_value = request
+        self.protocol_handler.run_once()
+        mock_server_conn.assert_not_called()
+
+        # Client write:
+        self._conn.send.return_value = len(cache_response)
+        self.protocol_handler.run_once()
+        self._conn.send.assert_called_once_with(cache_response)
+
+        # Client close connection:
+        self._conn.recv.return_value = b''
+        self.protocol_handler.run_once()
+        self.protocol_handler.shutdown()
+
+    @without_upstream
+    @mock.patch('proxy.http.proxy.server.TcpServerConnection')
+    def test_cache_responses_plugin_not_cached(self, mock_server_conn: mock.Mock) -> None:
+        CacheResponsesPlugin.local.set()
+
+        request = build_http_request(
+            b'GET', b'http://example.org/get',
+            headers={
+                b'Host': b'example.org',
+            }
+        )
+
+        cache_response = build_http_response(
+            httpStatusCodes.BAD_GATEWAY,
+            reason=b'Bad gateway',
+            headers={
+                b'Server': PROXY_AGENT_HEADER_VALUE,
+                b'Connection': b'close',
+            },
+            body=b'Ressource has not been cached yet. Please allow upstream.'
+        )
 
         # Setup server:
         server = mock_server_conn.return_value
