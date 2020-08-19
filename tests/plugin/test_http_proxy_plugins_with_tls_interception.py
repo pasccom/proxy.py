@@ -29,39 +29,22 @@ from proxy.http.handler import HttpProtocolHandler
 from proxy.http.proxy import HttpProxyPlugin
 
 from .utils import get_plugin_by_test_name
+from .utils import with_and_without_upstream
 
 
 class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
 
-    @mock.patch('ssl.wrap_socket')
-    @mock.patch('ssl.create_default_context')
-    @mock.patch('proxy.http.proxy.server.TcpServerConnection')
-    @mock.patch('proxy.http.proxy.server.gen_public_key')
-    @mock.patch('proxy.http.proxy.server.gen_csr')
-    @mock.patch('proxy.http.proxy.server.sign_csr')
+    def __init__(self, *args: Any, **kwArgs: Any) -> None:
+        super().__init__(*args, **kwArgs)
+        self.connect_upstream = True
+
     @mock.patch('selectors.DefaultSelector')
     @mock.patch('socket.fromfd')
     def setUp(self,
               mock_fromfd: mock.Mock,
-              mock_selector: mock.Mock,
-              mock_sign_csr: mock.Mock,
-              mock_gen_csr: mock.Mock,
-              mock_gen_public_key: mock.Mock,
-              mock_server_conn: mock.Mock,
-              mock_ssl_context: mock.Mock,
-              mock_ssl_wrap: mock.Mock) -> None:
+              mock_selector: mock.Mock) -> None:
         self.mock_fromfd = mock_fromfd
         self.mock_selector = mock_selector
-        self.mock_sign_csr = mock_sign_csr
-        self.mock_gen_csr = mock_gen_csr
-        self.mock_gen_public_key = mock_gen_public_key
-        self.mock_server_conn = mock_server_conn
-        self.mock_ssl_context = mock_ssl_context
-        self.mock_ssl_wrap = mock_ssl_wrap
-
-        self.mock_sign_csr.return_value = True
-        self.mock_gen_csr.return_value = True
-        self.mock_gen_public_key.return_value = True
 
         self.fileno = 10
         self._addr = ('127.0.0.1', 54382)
@@ -83,13 +66,34 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
             TcpClientConnection(self._conn, self._addr), flags=self.flags)
         self.protocol_handler.initialize()
 
-        self.server = self.mock_server_conn.return_value
-        self.server.addr = ('uni.corn', 433)
+    @mock.patch('ssl.wrap_socket')
+    @mock.patch('ssl.create_default_context')
+    @mock.patch('proxy.http.proxy.server.gen_public_key')
+    @mock.patch('proxy.http.proxy.server.gen_csr')
+    @mock.patch('proxy.http.proxy.server.sign_csr')
+    @mock.patch('proxy.http.proxy.server.TcpServerConnection')
+    def connect(self,
+                mock_server_conn: mock.Mock,
+                mock_sign_csr: mock.Mock,
+                mock_gen_csr: mock.Mock,
+                mock_gen_public_key: mock.Mock,
+                mock_ssl_context: mock.Mock,
+                mock_ssl_wrap: mock.Mock) -> None:
+        self.mock_server_conn = mock_server_conn
+        self.mock_ssl_context = mock_ssl_context
+        self.mock_ssl_wrap = mock_ssl_wrap
+
+        mock_sign_csr.return_value = True
+        mock_gen_csr.return_value = True
+        mock_gen_public_key.return_value = True
 
         self.server_ssl_connection = mock.MagicMock(spec=ssl.SSLSocket)
         self.mock_ssl_context.return_value.wrap_socket.return_value = self.server_ssl_connection
         self.client_ssl_connection = mock.MagicMock(spec=ssl.SSLSocket)
         self.mock_ssl_wrap.return_value = self.client_ssl_connection
+
+        self.server = self.mock_server_conn.return_value
+        self.server.addr = ('uni.corn', 433)
 
         def has_buffer() -> bool:
             return cast(bool, self.server.queue.called)
@@ -145,7 +149,6 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
                 data=None), selectors.EVENT_READ)],
         ]
 
-        # Connect
         def send(raw: bytes) -> int:
             return len(raw)
 
@@ -155,16 +158,20 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         )
         self.protocol_handler.run_once()
 
-        self.assertEqual(self.mock_sign_csr.call_count, 1)
-        self.assertEqual(self.mock_gen_csr.call_count, 1)
-        self.assertEqual(self.mock_gen_public_key.call_count, 1)
+        self.assertEqual(mock_sign_csr.call_count, 1)
+        self.assertEqual(mock_gen_csr.call_count, 1)
+        self.assertEqual(mock_gen_public_key.call_count, 1)
 
-        self.mock_server_conn.assert_called_once_with('uni.corn', 443)
-        self.server.connect.assert_called()
+        if self.connect_upstream:
+            self.mock_server_conn.assert_called_once_with('uni.corn', 443)
+            self.server.connect.assert_called()
+            self.assertEqual(self.server.connection, self.server_ssl_connection)
+        else:
+            self.mock_server_conn.assert_not_called()
+
         self.assertEqual(
             self.protocol_handler.client.connection,
             self.client_ssl_connection)
-        self.assertEqual(self.server.connection, self.server_ssl_connection)
         self._conn.send.assert_called_with(
             HttpProxyPlugin.PROXY_TUNNEL_ESTABLISHED_RESPONSE_PKT
         )
@@ -179,6 +186,8 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
             os.remove(tmpDir / 'list.txt')
 
     def test_modify_post_data_plugin(self) -> None:
+        self.connect()
+
         original = b'{"key": "value"}'
         modified = b'{"key": "modified"}'
         self.client_ssl_connection.recv.return_value = build_http_request(
@@ -204,6 +213,8 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         )
 
     def test_man_in_the_middle_plugin(self) -> None:
+        self.connect()
+
         request = build_http_request(
             b'GET', b'/',
             headers={
@@ -234,6 +245,8 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         )
 
     def test_cache_responses_plugin_cache(self) -> None:
+        self.connect()
+
         request = build_http_request(
             b'GET', b'/get',
             headers={
@@ -285,6 +298,7 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         with open(Path(tempfile.gettempdir()) / ('proxy-cache-' + cache_file_name), 'rb') as cache_file:
             self.assertEqual(cache_file.read(), server_response)
 
+    @with_and_without_upstream
     def test_cache_responses_plugin_load(self) -> None:
         request = build_http_request(
             b'GET', b'/get',
@@ -299,11 +313,15 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         )
 
         # Setup cache:
-        cache_file_name = 'test'
         with open(Path(tempfile.gettempdir()) / 'list.txt', 'wt') as cache_list:
-            cache_list.write('GET uni.corn /get None %s\n' % cache_file_name)
-        with open(Path(tempfile.gettempdir()) / ('proxy-cache-' + cache_file_name), 'wb') as cache_file:
+            cache_list.write('CONNECT uni.corn / None connect\n')
+            cache_list.write('GET uni.corn /get None test\n')
+        with open(Path(tempfile.gettempdir()) / 'proxy-cache-connect', 'wb'):
+            pass
+        with open(Path(tempfile.gettempdir()) / 'proxy-cache-test', 'wb') as cache_file:
             cache_file.write(cache_response)
+
+        self.connect()
 
         # Setup selector:
         self.mock_selector.return_value.select.side_effect = [
@@ -339,6 +357,7 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         self.protocol_handler.run_once()
         self.protocol_handler.shutdown()
 
+    @with_and_without_upstream
     def test_cache_responses_plugin_load_pipelined(self) -> None:
         requests = []
         cache_responses = []
@@ -360,6 +379,8 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
                 ))
                 with open(Path(tempfile.gettempdir()) / ('proxy-cache-test%d' % r), 'wb') as cache_file:
                     cache_file.write(cache_responses[-1])
+
+        self.connect()
 
         # Setup selector:
         self.mock_selector.return_value.select.side_effect = [

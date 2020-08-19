@@ -8,11 +8,28 @@
     :copyright: (c) 2013-present by Abhinav Singh and contributors.
     :license: BSD, see LICENSE for more details.
 """
-from typing import Type
+from typing import Any, Type, Callable
 from proxy.http.proxy import HttpProxyBasePlugin
 
 from proxy.plugin import ModifyPostDataPlugin, ProposedRestApiPlugin, RedirectToCustomServerPlugin, \
     FilterByUpstreamHostPlugin, CacheResponsesPlugin, ManInTheMiddlePlugin, FilterByURLRegexPlugin
+
+
+def with_and_without_upstream(fun: Callable[..., None]) -> Callable[..., None]:
+    def decorated_fun(self: Any, *args: Any, **kwArgs: Any) -> None:
+        with self.subTest(msg='Without upstream'):
+            CacheResponsesPlugin.local.set()
+            if hasattr(self, 'connect_upstream'):
+                self.connect_upstream = False
+            self.setUp()
+            fun(self, *args, **kwArgs)
+        with self.subTest(msg='With upstream'):
+            CacheResponsesPlugin.local.clear()
+            if hasattr(self, 'connect_upstream'):
+                self.connect_upstream = True
+            self.setUp()
+            fun(self, *args, **kwArgs)
+    return decorated_fun
 
 
 def get_plugin_by_test_name(test_name: str) -> Type[HttpProxyBasePlugin]:

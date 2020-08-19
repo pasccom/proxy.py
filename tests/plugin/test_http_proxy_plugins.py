@@ -17,7 +17,7 @@ from pathlib import Path
 
 from urllib import parse as urlparse
 from unittest import mock
-from typing import cast
+from typing import Any, cast
 
 from proxy.common.flags import Flags
 from proxy.core.connection import TcpClientConnection
@@ -30,9 +30,14 @@ from proxy.http.codes import httpStatusCodes
 from proxy.plugin import ProposedRestApiPlugin, RedirectToCustomServerPlugin
 
 from .utils import get_plugin_by_test_name
+from .utils import with_and_without_upstream
 
 
 class TestHttpProxyPluginExamples(unittest.TestCase):
+
+    def __init__(self, *args: Any, **kwArgs: Any) -> None:
+        super().__init__(*args, **kwArgs)
+        self.connect_upstream = True
 
     @mock.patch('selectors.DefaultSelector')
     @mock.patch('socket.fromfd')
@@ -392,6 +397,7 @@ class TestHttpProxyPluginExamples(unittest.TestCase):
         with open(Path(tempfile.gettempdir()) / ('proxy-cache-' + cache_file_name), 'rb') as cache_file:
             self.assertEqual(cache_file.read(), server_response)
 
+    @with_and_without_upstream
     @mock.patch('proxy.http.proxy.server.TcpServerConnection')
     def test_cache_responses_plugin_load(self, mock_server_conn: mock.Mock) -> None:
         request = build_http_request(
@@ -461,6 +467,7 @@ class TestHttpProxyPluginExamples(unittest.TestCase):
         self.protocol_handler.run_once()
         self.protocol_handler.shutdown()
 
+    @with_and_without_upstream
     @mock.patch('proxy.http.proxy.server.TcpServerConnection')
     def test_cache_responses_plugin_load_pipelined(self, mock_server_conn: mock.Mock) -> None:
         requests = []
