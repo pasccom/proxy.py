@@ -21,5 +21,5 @@ class CacheResponsesPlugin(BaseCacheResponsesPlugin):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.disk_store = OnDiskCacheStore(
-            uid=self.uid, cache_dir=tempfile.gettempdir())
+            uid=self.uid, cache_dir=tempfile.gettempdir())  # TODO make cache_dir configurable (and adapt tests)
         self.set_store(self.disk_store)

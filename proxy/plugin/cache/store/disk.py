@@ -30,10 +30,11 @@ class OnDiskCacheStore(CacheStore):
     def __init__(self, uid: UUID, cache_dir: str) -> None:
         super().__init__(uid)
         self.cache_dir = cache_dir
+        self.cache_list_name = 'list.txt'  # Make cache_list_name configurable (and adapt tests)
         if not os.path.isdir(self.cache_dir):
             os.mkdir(self.cache_dir)
         logger.debug("Opening cache list")
-        self.cache_list = open(os.path.join(self.cache_dir, 'list.txt'), 'at')
+        self.cache_list = open(os.path.join(self.cache_dir, self.cache_list_name), 'at')
         self.cache_file: Optional[BinaryIO] = None
 
     def __del__(self) -> None:
@@ -49,7 +50,7 @@ class OnDiskCacheStore(CacheStore):
         request_path = text_(request.path)
         request_body = sha512(request.body).hexdigest() if request.body else 'None'
 
-        with self.lock, open(os.path.join(self.cache_dir, 'list.txt'), 'rt') as cache_list:
+        with self.lock, open(os.path.join(self.cache_dir, self.cache_list_name), 'rt') as cache_list:
             for cache_line in cache_list:
                 method, host, path, body, cache_file_name = cache_line.strip().split(' ')
                 if ((method == request_method) and (host == request_host) and
